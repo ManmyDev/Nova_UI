@@ -68,7 +68,7 @@ TabClass.__index = TabClass
 SectionClass.__index = SectionClass
 
 local RAIL_W = 64
-local HEADER_H = 56
+local HEADER_H = 60
 local PILL_W, PILL_H, PILL_TOP = 150, 36, 14  -- ขนาดและตำแหน่งของแคปซูล (Dynamic Island)
 
 Library.Presets = Presets
@@ -136,7 +136,7 @@ end
 local function label(props)
 	local p = {
 		BackgroundTransparency = 1, Font = Theme.Font, TextColor3 = Theme.Text,
-		TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+		TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
 	}
 	for k, v in pairs(props) do p[k] = v end
 	return new("TextLabel", p)
@@ -263,37 +263,64 @@ function Library:CreateWindow(opts)
 	})
 	self.Gui = gui
 
-	local size = opts.Size or Vector2.new(780, 520)
+	-- ขนาดหน้าต่าง: ไม่ใช้ UIScale/CanvasGroup (ทำให้ตัวอักษรเบลอเหมือนภาพแปะ)
+	-- แต่ปรับขนาดให้พอดีกับจอ และใช้เลขคู่เพื่อให้ขอบและตัวอักษรคมชัด
 	local cam = workspace.CurrentCamera
 	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-	local scale = math.clamp(math.min(vp.X / (size.X + 40), vp.Y / (size.Y + 40)), 0.5, 1)
+	local want = opts.Size or Vector2.new(880, 560)
+	local size = Vector2.new(
+		math.max(320, math.floor(math.min(want.X, vp.X - 32) / 2) * 2),
+		math.max(240, math.floor(math.min(want.Y, vp.Y - 32) / 2) * 2)
+	)
+	local function screen()
+		local a = gui.AbsoluteSize
+		if a.X < 2 or a.Y < 2 then a = vp end
+		return a
+	end
+	local function centerPos()
+		local a = screen()
+		return UDim2.fromOffset(math.floor(a.X / 2), math.floor(a.Y / 2))
+	end
+	local function pillPosNow()
+		local a = screen()
+		return UDim2.fromOffset(math.floor(a.X / 2), PILL_TOP + PILL_H / 2)
+	end
+	self._screen, self._centerPos = screen, centerPos
 
 	-- สถานะเริ่มต้นเป็นแคปซูลกลางบนจอ แล้วขยายออกเป็นหน้าต่าง (Dynamic Island)
 	local pillSize = UDim2.fromOffset(PILL_W, PILL_H)
-	local pillPos = UDim2.new(0.5, 0, 0, PILL_TOP + PILL_H / 2)
-	self._pillSize, self._pillPos = pillSize, pillPos
-	self._openSize = UDim2.fromOffset(size.X, size.Y)
-	self._openPos = UDim2.fromScale(0.5, 0.5)
+	self._pillSize, self._pillPos = pillSize, pillPosNow()
+	self._baseSize = UDim2.fromOffset(size.X, size.Y)
+	self._openSize, self._openPos = self._baseSize, centerPos()
+	self._centered = true
 	self.IsOpen = false
 
-	local main = new("CanvasGroup", {
-		Name = "Main", AnchorPoint = Vector2.new(0.5, 0.5), Position = pillPos, Size = pillSize,
-		BackgroundTransparency = 1, BorderSizePixel = 0, Parent = gui,
-	}, { new("UICorner", { CornerRadius = UDim.new(0, PILL_H / 2) }), new("UIScale", { Scale = scale }) })
+	local main = new("Frame", {
+		Name = "Main", AnchorPoint = Vector2.new(0.5, 0.5), Position = self._pillPos, Size = pillSize,
+		BackgroundColor3 = Theme.Background, BorderSizePixel = 0, ClipsDescendants = true, Parent = gui,
+	}, {
+		new("UICorner", { CornerRadius = UDim.new(0, PILL_H / 2) }),
+		-- ไล่เฉดเทาบางๆ ให้พื้นหลังมีมิติ (ไม่มีสี)
+		new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(185, 185, 185)), Rotation = 90 }),
+	})
 	self.Main = main
 	self._corner = main:FindFirstChildOfClass("UICorner")
 	stroke(Theme.Line, 1).Parent = main
-	-- พื้นหลังไล่เฉดเทาบางๆ ให้มีมิติ (ไม่มีสี)
-	new("Frame", {
-		Name = "Bg", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Theme.Background, BorderSizePixel = 0, ZIndex = 0, Parent = main,
-	}, { new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(185, 185, 185)), Rotation = 90 }) })
+
+	-- จัดกึ่งกลางใหม่เมื่อขนาดจอเปลี่ยน
+	self:_track(gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		self._pillPos = pillPosNow()
+		if self._centered then self._openPos = centerPos() end
+		main.Position = self.IsOpen and self._openPos or self._pillPos
+	end))
 
 	-- ผิวของแคปซูล (โลโก้ + ชื่อ) แสดงตอนพับ จางหายตอนขยาย
-	local cover = new("CanvasGroup", {
+	local cover = new("Frame", {
 		Name = "Island", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
 		BorderSizePixel = 0, ZIndex = 100, Parent = main,
-	})
+	}, { new("UICorner", { CornerRadius = UDim.new(0, PILL_H / 2) }) })
 	self._cover = cover
+	self._coverCorner = cover:FindFirstChildOfClass("UICorner")
 	local face = new("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(124, 24), BackgroundTransparency = 1, Parent = cover,
@@ -303,9 +330,16 @@ function Library:CreateWindow(opts)
 	grad(faceLogo, 45)
 	label({
 		Text = (opts.Title or "NovaUI") .. (opts.Version and (" " .. opts.Version) or ""),
-		Font = Theme.FontBold, TextSize = 13, Position = UDim2.fromOffset(30, 0), Size = UDim2.new(1, -30, 1, 0),
+		Font = Theme.FontBold, TextSize = 17, Position = UDim2.fromOffset(30, 0), Size = UDim2.new(1, -30, 1, 0),
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = face,
 	})
+	-- รายการที่ต้องไล่ความโปร่งใสตอนเปิด/ปิด (แทน CanvasGroup)
+	self._fade = { { cover, "BackgroundTransparency" } }
+	for _, d in ipairs(face:GetDescendants()) do
+		if d:IsA("TextLabel") then table.insert(self._fade, { d, "TextTransparency" })
+		elseif d:IsA("ImageLabel") then table.insert(self._fade, { d, "ImageTransparency" })
+		elseif d:IsA("Frame") then table.insert(self._fade, { d, "BackgroundTransparency" }) end
+	end
 	local hit = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 5, Parent = cover })
 	hit.MouseButton1Click:Connect(function() self:Open() end)
 
@@ -314,7 +348,7 @@ function Library:CreateWindow(opts)
 	local backdrop = new("TextButton", {
 		Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1,
 		Text = "", AutoButtonColor = false, ZIndex = 90, Parent = layer,
-	})
+	}, { round(12) })
 	self._layer, self._backdrop, self._activePicker = layer, backdrop, nil
 	backdrop.MouseButton1Click:Connect(function()
 		if self._activePicker then self._activePicker.Close() end
@@ -337,7 +371,7 @@ function Library:CreateWindow(opts)
 		BorderSizePixel = 0, Visible = false, ZIndex = 50, Parent = gui,
 	}, { round(6), stroke(Theme.Line), pad(10, 6, 10, 6) })
 	local tipLabel = label({
-		AutomaticSize = Enum.AutomaticSize.XY, TextSize = 13, ZIndex = 51, Parent = tip,
+		AutomaticSize = Enum.AutomaticSize.XY, TextSize = 15, ZIndex = 51, Parent = tip,
 	})
 	function self:_showTip(target, text)
 		tipLabel.Text = text
@@ -351,8 +385,13 @@ function Library:CreateWindow(opts)
 
 	-- แถบไอคอนซ้าย ------------------------------------------------------
 	local rail = new("Frame", {
-		Size = UDim2.new(0, RAIL_W, 1, 0), BackgroundColor3 = Theme.Rail, BorderSizePixel = 0, Parent = main,
+		Size = UDim2.new(0, RAIL_W, 1, 0), BackgroundTransparency = 1, ClipsDescendants = true, Parent = main,
 	})
+	-- พื้นแถบซ้าย: กว้างเกินแล้วโดนตัด เพื่อให้มีเฉพาะมุมซ้ายที่โค้งตามหน้าต่าง
+	new("Frame", {
+		Name = "RailBg", Size = UDim2.new(1, 24, 1, 0), BackgroundColor3 = Theme.Rail, BorderSizePixel = 0, ZIndex = 0, Parent = rail,
+	}, { round(12) })
+	self._rail = rail
 	makeDivider(rail, { Position = UDim2.new(1, -1, 0, 0) }, false, true)
 
 	-- โลโก้ (บนสุด ไม่เลื่อน)
@@ -402,16 +441,17 @@ function Library:CreateWindow(opts)
 		BackgroundTransparency = 1, ClipsDescendants = true, Parent = main,
 	})
 	self.Right = right
+	rail.Visible, right.Visible = false, false -- ซ่อนจนกว่าจะขยายออกจากแคปซูล
 
 	local header = new("Frame", { Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1, Parent = right })
 	self._header = header
 	makeDivider(header, { Position = UDim2.new(0, 0, 1, -1) }, true)
 	self.TitleLabel = label({
-		Font = Theme.FontBold, TextSize = 18, Position = UDim2.fromOffset(20, 9), Size = UDim2.new(1, -150, 0, 22),
+		Font = Theme.FontBold, TextSize = 20, Position = UDim2.fromOffset(20, 8), Size = UDim2.new(1, -150, 0, 24),
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = header,
 	})
 	self.GroupLabel = label({
-		TextColor3 = Theme.Muted, TextSize = 12, Position = UDim2.fromOffset(20, 31), Size = UDim2.new(1, -150, 0, 16),
+		TextColor3 = Theme.Muted, TextSize = 14, Position = UDim2.fromOffset(20, 33), Size = UDim2.new(1, -150, 0, 18),
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = header,
 	})
 
@@ -422,7 +462,7 @@ function Library:CreateWindow(opts)
 	local function ctrl(glyph, order, hoverColor)
 		local b = new("TextButton", {
 			Size = UDim2.fromOffset(28, 28), BackgroundColor3 = hoverColor, BackgroundTransparency = 1,
-			Text = glyph, Font = Theme.Font, TextSize = 14, TextColor3 = Theme.Muted,
+			Text = glyph, Font = Theme.Font, TextSize = 16, TextColor3 = Theme.Muted,
 			AutoButtonColor = false, LayoutOrder = order, Parent = controls,
 		}, { round(7) })
 		b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.15 }) b.TextColor3 = Theme.Text end)
@@ -441,14 +481,12 @@ function Library:CreateWindow(opts)
 	maxBtn.MouseButton1Click:Connect(function()
 		if not self.IsOpen then return end
 		maximized = not maximized
-		if maximized then
-			local v = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
-			local s = main:FindFirstChildOfClass("UIScale").Scale
-			self._openSize = UDim2.fromOffset(v.X / s - 40, v.Y / s - 40)
-		else
-			self._openSize = UDim2.fromOffset(size.X, size.Y)
-		end
-		self._openPos = UDim2.fromScale(0.5, 0.5)
+		local a = self._screen()
+		self._openSize = maximized
+			and UDim2.fromOffset(math.floor((a.X - 40) / 2) * 2, math.floor((a.Y - 40) / 2) * 2)
+			or self._baseSize
+		self._openPos = self._centerPos()
+		self._centered = true
 		tween(main, { Size = self._openSize, Position = self._openPos }, 0.25)
 	end)
 
@@ -464,10 +502,10 @@ function Library:CreateWindow(opts)
 	end)
 	self:_track(UserInputService.InputChanged:Connect(function(input)
 		if dragging and isMove(input) then
-			local s = main:FindFirstChildOfClass("UIScale").Scale
-			local d = (input.Position - dragStart) / s
-			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			local d = input.Position - dragStart
+			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + math.floor(d.X), startPos.Y.Scale, startPos.Y.Offset + math.floor(d.Y))
 			self._openPos = main.Position
+			self._centered = false
 		end
 	end))
 
@@ -502,21 +540,21 @@ function WindowClass:Notify(o)
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
 		LayoutOrder = self._toastOrder, Parent = self._toastHolder,
 	})
-	local card = new("CanvasGroup", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Position = UDim2.new(1, 40, 0, 0),
-		BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, GroupTransparency = 1, Parent = wrapper,
+	local card = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Position = UDim2.new(1, 60, 0, 0),
+		BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Parent = wrapper,
 	}, { round(12), stroke(Theme.Line), new("UISizeConstraint", { MinSize = Vector2.new(0, 60) }) })
 
 	local body = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Parent = card,
 	}, { pad(58, 12, 36, 16), listLayout(3) })
 	label({
-		Text = o.Title or "Notification", Font = Theme.FontBold, TextSize = 14, TextWrapped = true,
+		Text = o.Title or "Notification", Font = Theme.FontBold, TextSize = 16, TextWrapped = true,
 		AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 1, Parent = body,
 	})
 	if o.Content and o.Content ~= "" then
 		label({
-			Text = o.Content, TextColor3 = Theme.Muted, TextSize = 13, TextWrapped = true,
+			Text = o.Content, TextColor3 = Theme.Muted, TextSize = 15, TextWrapped = true,
 			AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 2, Parent = body,
 		})
 	end
@@ -525,16 +563,16 @@ function WindowClass:Notify(o)
 	icon.Position = UDim2.fromOffset(14, 14)
 	if not tint then grad(icon, 45) end
 	label({
-		Text = "✕", TextColor3 = Theme.Muted, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center,
+		Text = "✕", TextColor3 = Theme.Muted, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center,
 		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 12), Size = UDim2.fromOffset(16, 16), Parent = card,
 	})
 
 	local bar
 	if duration > 0 then
 		bar = new("Frame", {
-			AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 2),
+			AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 14, 1, -1), Size = UDim2.new(1, -28, 0, 2),
 			BackgroundColor3 = tint or Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = card,
-		})
+		}, { round(1) })
 		if not tint then grad(bar, 0) end
 	end
 
@@ -546,7 +584,7 @@ function WindowClass:Notify(o)
 		local i = table.find(self._toasts, handle)
 		if i then table.remove(self._toasts, i) end
 		TweenService:Create(card, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-			Position = UDim2.new(1, 40, 0, 0), GroupTransparency = 1,
+			Position = UDim2.new(1, 60, 0, 0),
 		}):Play()
 		task.delay(0.26, function()
 			if not wrapper.Parent then return end
@@ -566,7 +604,6 @@ function WindowClass:Notify(o)
 	end)
 
 	TweenService:Create(card, TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Position = UDim2.new(0, 0, 0, 0) }):Play()
-	TweenService:Create(card, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
 	if bar then
 		TweenService:Create(bar, TweenInfo.new(duration, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 0, 2) }):Play()
 		task.delay(duration, handle.Close)
@@ -574,20 +611,26 @@ function WindowClass:Notify(o)
 	return handle
 end
 
+-- ไล่ความโปร่งใสของผิวแคปซูล (0 = ทึบ, 1 = จางหาย)
+function WindowClass:_fadeCover(to, info)
+	for _, t in ipairs(self._fade) do
+		TweenService:Create(t[1], info, { [t[2]] = to }):Play()
+	end
+end
+
 -- ขยายจากแคปซูลเป็นหน้าต่าง (สปริงเด้งนิดๆ แบบ Dynamic Island)
 function WindowClass:Open()
 	if self.IsOpen then return end
 	self.IsOpen = true
 	self._cover.Visible = true
+	self._rail.Visible, self.Right.Visible = true, true
 	TweenService:Create(self.Main, TweenInfo.new(0.55, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
 		Size = self._openSize, Position = self._openPos,
 	}):Play()
-	TweenService:Create(self._corner, TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-		CornerRadius = UDim.new(0, 12),
-	}):Play()
-	TweenService:Create(self._cover, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.12), {
-		GroupTransparency = 1,
-	}):Play()
+	local cornerInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	TweenService:Create(self._corner, cornerInfo, { CornerRadius = UDim.new(0, 12) }):Play()
+	TweenService:Create(self._coverCorner, cornerInfo, { CornerRadius = UDim.new(0, 12) }):Play()
+	self:_fadeCover(1, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.12))
 	task.delay(0.45, function()
 		if self.IsOpen then self._cover.Visible = false end
 	end)
@@ -601,15 +644,17 @@ function WindowClass:Close()
 	if self._activePicker then self._activePicker.Close(true) end
 	self._layer.Visible = false
 	self._cover.Visible = true
-	TweenService:Create(self._cover, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		GroupTransparency = 0,
-	}):Play()
+	self:_fadeCover(0, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out))
 	TweenService:Create(self.Main, TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.InOut), {
 		Size = self._pillSize, Position = self._pillPos,
 	}):Play()
-	TweenService:Create(self._corner, TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.InOut), {
-		CornerRadius = UDim.new(0, PILL_H / 2),
-	}):Play()
+	local cornerInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.InOut)
+	TweenService:Create(self._corner, cornerInfo, { CornerRadius = UDim.new(0, PILL_H / 2) }):Play()
+	TweenService:Create(self._coverCorner, cornerInfo, { CornerRadius = UDim.new(0, PILL_H / 2) }):Play()
+	-- ซ่อนเนื้อหาหลังผิวแคปซูลทึบแล้ว กันมุมเหลี่ยมโผล่ตอนเป็นแคปซูล
+	task.delay(0.22, function()
+		if not self.IsOpen then self._rail.Visible, self.Right.Visible = false, false end
+	end)
 end
 
 function WindowClass:Toggle()
@@ -641,12 +686,12 @@ function WindowClass:SelectTab(tab)
 	local x = 20
 	if tab.Icon and tab.Icon ~= "" then
 		local ic = makeIcon(self._header, tab.Icon, 30, tab.Color or Theme.Accent)
-		ic.Position = UDim2.fromOffset(18, 13)
+		ic.Position = UDim2.fromOffset(18, 15)
 		self._titleIcon = ic
 		x = 58
 	end
-	self.TitleLabel.Position = UDim2.fromOffset(x, 9)
-	self.GroupLabel.Position = UDim2.fromOffset(x, 31)
+	self.TitleLabel.Position = UDim2.fromOffset(x, 8)
+	self.GroupLabel.Position = UDim2.fromOffset(x, 33)
 end
 
 ------------------------------------------------------------------ tabs
@@ -721,7 +766,7 @@ function TabClass:AddSection(o)
 	}, { listLayout(10) })
 
 	if o.Title then
-		local head = new("Frame", { Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1, LayoutOrder = 1, Parent = holder })
+		local head = new("Frame", { Size = UDim2.new(1, 0, 0, 42), BackgroundTransparency = 1, LayoutOrder = 1, Parent = holder })
 		local x = 14
 		if o.Icon then
 			-- ไอคอนหัวข้อ (ใส่ Color เองได้ ถ้าไม่ใส่จะเป็นสีไล่เฉดของธีม)
@@ -731,13 +776,13 @@ function TabClass:AddSection(o)
 			x = 46
 		else
 			local stripe = new("Frame", {
-				Position = UDim2.fromOffset(0, 2), Size = UDim2.fromOffset(3, 30),
+				Position = UDim2.fromOffset(0, 3), Size = UDim2.fromOffset(3, 34),
 				BackgroundColor3 = o.Color or Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = head,
 			}, { round(2) })
 			if not o.Color then grad(stripe, 90) end
 		end
-		label({ Text = o.Title, Font = Theme.FontBold, TextSize = 16, Position = UDim2.fromOffset(x, 3), Size = UDim2.new(1, -x, 0, 18), Parent = head })
-		label({ Text = o.Description or "", TextColor3 = Theme.Muted, TextSize = 12, Position = UDim2.fromOffset(x, 21), Size = UDim2.new(1, -x, 0, 14), Parent = head })
+		label({ Text = o.Title, Font = Theme.FontBold, TextSize = 18, Position = UDim2.fromOffset(x, 3), Size = UDim2.new(1, -x, 0, 20), Parent = head })
+		label({ Text = o.Description or "", TextColor3 = Theme.Muted, TextSize = 14, Position = UDim2.fromOffset(x, 23), Size = UDim2.new(1, -x, 0, 18), Parent = head })
 	end
 
 	local card = new("Frame", {
@@ -763,16 +808,16 @@ end
 
 local function makeRow(el, title, desc, rightWidth)
 	local hasDesc = desc ~= nil and desc ~= ""
-	local row = new("Frame", { Size = UDim2.new(1, 0, 0, hasDesc and 60 or 50), BackgroundTransparency = 1, LayoutOrder = 1, Parent = el })
+	local row = new("Frame", { Size = UDim2.new(1, 0, 0, hasDesc and 66 or 54), BackgroundTransparency = 1, LayoutOrder = 1, Parent = el })
 	local t = label({
-		Text = title or "", TextSize = 14,
-		Position = UDim2.fromOffset(16, hasDesc and 11 or 15), Size = UDim2.new(1, -(rightWidth + 32), 0, 20),
+		Text = title or "", TextSize = 16,
+		Position = UDim2.fromOffset(16, hasDesc and 11 or 16), Size = UDim2.new(1, -(rightWidth + 32), 0, 22),
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = row,
 	})
 	if hasDesc then
 		label({
-			Text = desc, TextColor3 = Theme.Muted, TextSize = 12,
-			Position = UDim2.fromOffset(16, 31), Size = UDim2.new(1, -(rightWidth + 32), 0, 16),
+			Text = desc, TextColor3 = Theme.Muted, TextSize = 14,
+			Position = UDim2.fromOffset(16, 35), Size = UDim2.new(1, -(rightWidth + 32), 0, 20),
 			TextTruncate = Enum.TextTruncate.AtEnd, Parent = row,
 		})
 	end
@@ -794,9 +839,9 @@ function SectionClass:AddButton(o)
 	local el = newElement(self)
 	local row = makeRow(el, o.Title, o.Description, 110)
 	local btn = new("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.fromOffset(94, 32),
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.fromOffset(100, 34),
 		BackgroundColor3 = Color3.new(1, 1, 1), Text = o.ButtonText or "Run", Font = Theme.FontBold,
-		TextSize = 13, TextColor3 = Theme.AccentText, AutoButtonColor = false, Parent = row,
+		TextSize = 15, TextColor3 = Theme.AccentText, AutoButtonColor = false, Parent = row,
 	}, { round(8) })
 	grad(btn, 0)
 	btn.MouseEnter:Connect(function() tween(btn, { BackgroundTransparency = 0.2 }) end)
@@ -810,19 +855,19 @@ end
 ------------------------------------------------------------------ toggle (OFF | ON)
 function SectionClass:AddToggle(o)
 	local el = newElement(self)
-	local row = makeRow(el, o.Title, o.Description, 90)
+	local row = makeRow(el, o.Title, o.Description, 98)
 	local state = o.Default and true or false
 
 	local seg = new("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.fromOffset(78, 28),
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.fromOffset(86, 30),
 		BackgroundColor3 = Theme.Off, Text = "", AutoButtonColor = false, Parent = row,
 	}, { round(8) })
 	local thumb = new("Frame", {
 		Position = UDim2.new(0, 3, 0, 3), Size = UDim2.new(0.5, -3, 1, -6),
 		BackgroundColor3 = Theme.Raised, BorderSizePixel = 0, Parent = seg,
 	}, { round(6) })
-	local offLabel = label({ Text = "OFF", Font = Theme.FontNumber, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(0.5, 0, 1, 0), ZIndex = 2, Parent = seg })
-	local onLabel = label({ Text = "ON", Font = Theme.FontNumber, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromScale(0.5, 0), Size = UDim2.new(0.5, 0, 1, 0), ZIndex = 2, Parent = seg })
+	local offLabel = label({ Text = "OFF", Font = Theme.FontNumber, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(0.5, 0, 1, 0), ZIndex = 2, Parent = seg })
+	local onLabel = label({ Text = "ON", Font = Theme.FontNumber, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromScale(0.5, 0), Size = UDim2.new(0.5, 0, 1, 0), ZIndex = 2, Parent = seg })
 
 	local thumbGrad = grad(thumb)
 	local function paint(v, instant)
@@ -861,10 +906,10 @@ function SectionClass:AddSlider(o)
 	local row = makeRow(el, o.Title, o.Description, 90)
 	local bubble = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, o.Description and o.Description ~= "" and 16 or 13),
-		Size = UDim2.fromOffset(64, 24), BackgroundColor3 = Theme.Raised, BorderSizePixel = 0, Parent = row,
+		Size = UDim2.fromOffset(68, 28), BackgroundColor3 = Theme.Raised, BorderSizePixel = 0, Parent = row,
 	}, { round(6) })
 	local valueLabel = label({
-		TextColor3 = Theme.Accent2, Font = Theme.FontNumber, TextSize = 13,
+		TextColor3 = Theme.Accent2, Font = Theme.FontNumber, TextSize = 15,
 		TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), Parent = bubble,
 	})
 
@@ -947,7 +992,7 @@ function SectionClass:AddDropdown(o)
 	local maxSel = o.Max
 	if maxSel == nil then maxSel = o.Multi and 0 or 1 end
 	local multi = maxSel ~= 1
-	local row = makeRow(el, o.Title, o.Description, 276)
+	local row = makeRow(el, o.Title, o.Description, 280)
 
 	local options, byName = normalize(o.Options)
 	local usePopup = o.Popup
@@ -966,7 +1011,7 @@ function SectionClass:AddDropdown(o)
 
 	-- ช่องเลือก ---------------------------------------------------------
 	local field = new("TextButton", {
-		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.fromOffset(260, 38),
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0), Size = UDim2.fromOffset(264, 42),
 		BackgroundColor3 = Theme.Field, Text = "", AutoButtonColor = false, Parent = row,
 	}, { round(8), stroke() })
 	local fieldStroke = field:FindFirstChildOfClass("UIStroke")
@@ -975,8 +1020,8 @@ function SectionClass:AddDropdown(o)
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = field,
 	})
 	local chev = label({
-		Text = "▾", TextColor3 = Theme.Muted, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Center,
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -18, 0.5, 0), Size = UDim2.fromOffset(24, 38), Parent = field,
+		Text = "▾", TextColor3 = Theme.Muted, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center,
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -18, 0.5, 0), Size = UDim2.fromOffset(24, 42), Parent = field,
 	})
 	local chipBox, clear
 	if multi then
@@ -985,8 +1030,8 @@ function SectionClass:AddDropdown(o)
 			ClipsDescendants = true, Visible = false, Parent = field,
 		}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder }) })
 		clear = new("TextButton", {
-			Text = "✕", Font = Theme.Font, TextSize = 12, TextColor3 = Theme.Muted, BackgroundTransparency = 1,
-			Size = UDim2.fromOffset(22, 38), Position = UDim2.new(1, -50, 0, 0), Parent = field,
+			Text = "✕", Font = Theme.Font, TextSize = 14, TextColor3 = Theme.Muted, BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(22, 42), Position = UDim2.new(1, -50, 0, 0), Parent = field,
 		})
 	end
 
@@ -1023,10 +1068,10 @@ function SectionClass:AddDropdown(o)
 		end
 		local function chip(txt, color, order)
 			new("TextLabel", {
-				AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 24), BackgroundColor3 = Theme.Raised,
-				Text = txt, TextColor3 = color or Theme.Text, Font = Theme.Font, TextSize = 12,
+				AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 26), BackgroundColor3 = Theme.Raised,
+				Text = txt, TextColor3 = color or Theme.Text, Font = Theme.Font, TextSize = 14,
 				TextTruncate = Enum.TextTruncate.AtEnd, LayoutOrder = order, Parent = chipBox,
-			}, { round(6), pad(8, 0, 8, 0), new("UISizeConstraint", { MaxSize = Vector2.new(170, 24) }) })
+			}, { round(6), pad(8, 0, 8, 0), new("UISizeConstraint", { MaxSize = Vector2.new(170, 26) }) })
 		end
 		chip(names[1], nil, 1)
 		if #names > 1 then chip("+" .. (#names - 1), Theme.Accent2, 2) end
@@ -1120,7 +1165,7 @@ function SectionClass:AddDropdown(o)
 				TextTruncate = Enum.TextTruncate.AtEnd, Parent = b,
 			})
 			opt.RightLabel = label({
-				Text = rightText(opt), Font = Theme.FontNumber, TextSize = 13,
+				Text = rightText(opt), Font = Theme.FontNumber, TextSize = 15,
 				TextColor3 = opt.Highlight and Theme.Ready or Theme.Muted,
 				TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0),
 				Position = UDim2.new(1, -16, 0, 0), Size = UDim2.new(0, 120, 1, 0), Parent = b,
@@ -1139,9 +1184,9 @@ function SectionClass:AddDropdown(o)
 		local P = {}
 		local layer, backdrop = window._layer, window._backdrop
 
-		local panel = new("CanvasGroup", {
+		local panel = new("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(400, 400),
-			BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, GroupTransparency = 1, Visible = false,
+			BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Visible = false, ClipsDescendants = true,
 			ZIndex = 91, Parent = layer,
 		}, { round(14), stroke(Theme.Line), new("UIScale", { Scale = 0.94 }) })
 		local scaleObj = panel:FindFirstChildOfClass("UIScale")
@@ -1149,16 +1194,16 @@ function SectionClass:AddDropdown(o)
 		-- หัว: ชื่อ + ตัวนับ + ปุ่มปิด
 		local head = new("Frame", { Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, Parent = panel })
 		label({
-			Text = o.Title or "Select", Font = Theme.FontBold, TextSize = 15,
+			Text = o.Title or "Select", Font = Theme.FontBold, TextSize = 17,
 			Position = UDim2.fromOffset(18, 0), Size = UDim2.new(1, -170, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = head,
 		})
 		local counter = label({
-			Font = Theme.FontNumber, TextSize = 12, TextColor3 = Theme.Accent2, TextXAlignment = Enum.TextXAlignment.Right,
+			Font = Theme.FontNumber, TextSize = 14, TextColor3 = Theme.Accent2, TextXAlignment = Enum.TextXAlignment.Right,
 			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -52, 0.5, 0), Size = UDim2.fromOffset(110, 20), Parent = head,
 		})
 		local closeX = new("TextButton", {
 			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(28, 28),
-			BackgroundColor3 = Theme.Raised, BackgroundTransparency = 1, Text = "✕", Font = Theme.Font, TextSize = 14,
+			BackgroundColor3 = Theme.Raised, BackgroundTransparency = 1, Text = "✕", Font = Theme.Font, TextSize = 16,
 			TextColor3 = Theme.Muted, AutoButtonColor = false, Parent = head,
 		}, { round(7) })
 		closeX.MouseEnter:Connect(function() tween(closeX, { BackgroundTransparency = 0 }) end)
@@ -1175,7 +1220,7 @@ function SectionClass:AddDropdown(o)
 			searchBox = new("TextBox", {
 				Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -24, 1, 0), BackgroundTransparency = 1, Text = "",
 				PlaceholderText = "Search...", PlaceholderColor3 = Theme.Muted, TextColor3 = Theme.Text, Font = Theme.Font,
-				TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, Parent = sf,
+				TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, Parent = sf,
 			})
 		end
 		local listTop = hasSearch and 104 or 60
@@ -1199,11 +1244,11 @@ function SectionClass:AddDropdown(o)
 		makeDivider(footer)
 		local clearBtn = new("TextButton", {
 			Position = UDim2.fromOffset(16, 12), Size = UDim2.fromOffset(90, 32), BackgroundTransparency = 1, Text = "Clear",
-			Font = Theme.Font, TextSize = 13, TextColor3 = Theme.Muted, AutoButtonColor = false, Parent = footer,
+			Font = Theme.Font, TextSize = 15, TextColor3 = Theme.Muted, AutoButtonColor = false, Parent = footer,
 		}, { round(8) })
 		local doneBtn = new("TextButton", {
 			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 12), Size = UDim2.fromOffset(96, 32),
-			BackgroundColor3 = Color3.new(1, 1, 1), Text = "Done", Font = Theme.FontBold, TextSize = 13,
+			BackgroundColor3 = Color3.new(1, 1, 1), Text = "Done", Font = Theme.FontBold, TextSize = 15,
 			TextColor3 = Theme.AccentText, AutoButtonColor = false, Parent = footer,
 		}, { round(8) })
 		grad(doneBtn, 0)
@@ -1216,7 +1261,8 @@ function SectionClass:AddDropdown(o)
 			local listH = math.min(math.max(visible, 1) * 46, 276)
 			list.Size = UDim2.new(1, 0, 0, listH)
 			empty.Visible = visible == 0
-			panel.Size = UDim2.fromOffset(400, listTop + listH + (multi and 56 or 8))
+			local ph = listTop + listH + (multi and 56 or 8)
+			panel.Size = UDim2.fromOffset(400, ph + ph % 2)
 		end
 
 		local function applyFilter()
@@ -1287,7 +1333,7 @@ function SectionClass:AddDropdown(o)
 				local boxGrad = grad(box, 45)
 				boxGrad.Enabled = false
 				local check = label({
-					Text = "✓", Font = Theme.FontBold, TextSize = 13, TextColor3 = Theme.AccentText,
+					Text = "✓", Font = Theme.FontBold, TextSize = 15, TextColor3 = Theme.AccentText,
 					TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.fromScale(1, 1), Visible = false, Parent = box,
 				})
 				local face = new("Frame", {
@@ -1300,7 +1346,7 @@ function SectionClass:AddDropdown(o)
 					TextTruncate = Enum.TextTruncate.AtEnd, Parent = b,
 				})
 				opt.PRight = label({
-					Text = rightText(opt), Font = Theme.FontNumber, TextSize = 13,
+					Text = rightText(opt), Font = Theme.FontNumber, TextSize = 15,
 					TextColor3 = opt.Highlight and Theme.Ready or Theme.Muted,
 					TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0),
 					Position = UDim2.new(1, -16, 0, 0), Size = UDim2.new(0, 110, 1, 0), Parent = b,
@@ -1323,10 +1369,8 @@ function SectionClass:AddDropdown(o)
 			if searchBox then searchBox.Text = "" end
 			applyFilter()
 			P.Refresh()
-			panel.GroupTransparency = 1
 			scaleObj.Scale = 0.94
 			tween(backdrop, { BackgroundTransparency = 0.45 }, 0.2)
-			TweenService:Create(panel, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
 			TweenService:Create(scaleObj, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 		end
 
@@ -1339,7 +1383,7 @@ function SectionClass:AddDropdown(o)
 				return
 			end
 			tween(backdrop, { BackgroundTransparency = 1 }, 0.15)
-			TweenService:Create(panel, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 1 }):Play()
+			TweenService:Create(scaleObj, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.96 }):Play()
 			task.delay(0.17, function()
 				if window._activePicker ~= P then
 					panel.Visible = false
