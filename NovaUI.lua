@@ -27,6 +27,8 @@
 
 	Dropdown Options ใส่เป็น string หรือ table ก็ได้:
 		{ Name = "ชื่อ", Icon = "👤" หรือ "rbxassetid://123", Right = "3:45", Highlight = false }
+	ขนาดหน้าต่าง: ค่าเริ่มต้นคำนวณจากจอ (คอม/มือถือ) ไม่เต็มจอ ปรับเองได้ด้วย Size = Vector2.new(กว้าง, สูง)
+	ลากขอบ/มุมด้วยเมาส์หรือนิ้วเพื่อปรับขนาดได้ (UI ภายในปรับตามเอง) ลากแถบหัวเพื่อย้าย
 	แจ้งเตือน: Window:Notify({ Title, Content, Type = "info"|"success"|"warning"|"error", Duration = 4, Icon, Callback })
 	Dropdown methods: :Get() :Set(v) :SetOptions(list) :SetRight(name, text, highlight) :SelectAll() :Clear()
 ]]
@@ -67,7 +69,7 @@ WindowClass.__index = WindowClass
 TabClass.__index = TabClass
 SectionClass.__index = SectionClass
 
-local RAIL_W = 64
+local RAIL_W = 72
 local HEADER_H = 60
 local PILL_W, PILL_H, PILL_TOP = 150, 36, 14  -- ขนาดและตำแหน่งของแคปซูล (Dynamic Island)
 
@@ -263,40 +265,53 @@ function Library:CreateWindow(opts)
 	})
 	self.Gui = gui
 
-	-- ขนาดหน้าต่าง: ไม่ใช้ UIScale/CanvasGroup (ทำให้ตัวอักษรเบลอเหมือนภาพแปะ)
-	-- แต่ปรับขนาดให้พอดีกับจอ และใช้เลขคู่เพื่อให้ขอบและตัวอักษรคมชัด
+	-- ===== ขนาดและตำแหน่งหน้าต่าง =====
+	-- ไม่ใช้ UIScale/CanvasGroup (ทำให้ตัวอักษรเบลอ) ขนาดเริ่มต้นคำนวณจากจอปัจจุบัน (คอม/มือถือ) ไม่เต็มจอ
+	-- ผู้ใช้ลากขอบ/มุมด้วยเมาส์หรือนิ้วเพื่อปรับขนาดได้ แล้ว UI ภายในจะคำนวณตามเอง
 	local cam = workspace.CurrentCamera
 	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-	local want = opts.Size or Vector2.new(880, 560)
-	local size = Vector2.new(
-		math.max(320, math.floor(math.min(want.X, vp.X - 32) / 2) * 2),
-		math.max(240, math.floor(math.min(want.Y, vp.Y - 32) / 2) * 2)
-	)
+	local MARGIN = 8              -- เว้นขอบจอ
+	local MIN_W0, MIN_H0 = 400, 280 -- ขนาดเล็กสุดของหน้าต่าง
 	local function screen()
 		local a = gui.AbsoluteSize
 		if a.X < 2 or a.Y < 2 then a = vp end
 		return a
 	end
-	local function centerPos()
+	local function defaultSize(a)
+		local small = a.X < 760 or a.Y < 520 or (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
+		if small then -- มือถือ/จอเล็ก: ใหญ่พอใช้แต่เว้นขอบ ไม่เต็มจอ
+			return Vector2.new(math.min(a.X * 0.9, 720), math.min(a.Y * 0.82, 560))
+		end
+		return Vector2.new(math.clamp(a.X * 0.5, 640, 900), math.clamp(a.Y * 0.62, 440, 600)) -- คอม
+	end
+	local function fitSize(w, h, a)
+		local maxW, maxH = a.X - MARGIN * 2, a.Y - MARGIN * 2
+		return math.floor(math.clamp(w, math.min(MIN_W0, maxW), maxW) / 2) * 2, math.floor(math.clamp(h, math.min(MIN_H0, maxH), maxH) / 2) * 2
+	end
+	-- ตำแหน่งมุมซ้ายบนที่ทำให้หน้าต่างอยู่กึ่งกลางจอ (เป็นพิกเซลเต็ม เพื่อให้คมชัด)
+	local function centerFor(w, h)
 		local a = screen()
-		return UDim2.fromOffset(math.floor(a.X / 2), math.floor(a.Y / 2))
+		return UDim2.fromOffset(math.floor((a.X - w) / 2), math.floor((a.Y - h) / 2))
 	end
 	local function pillPosNow()
 		local a = screen()
-		return UDim2.fromOffset(math.floor(a.X / 2), PILL_TOP + PILL_H / 2)
+		return UDim2.fromOffset(math.floor((a.X - PILL_W) / 2), PILL_TOP)
 	end
-	self._screen, self._centerPos = screen, centerPos
+	self._screen, self._centerFor = screen, centerFor
+
+	local want = opts.Size or defaultSize(screen())
+	local W, H = fitSize(want.X, want.Y, screen())
 
 	-- สถานะเริ่มต้นเป็นแคปซูลกลางบนจอ แล้วขยายออกเป็นหน้าต่าง (Dynamic Island)
 	local pillSize = UDim2.fromOffset(PILL_W, PILL_H)
 	self._pillSize, self._pillPos = pillSize, pillPosNow()
-	self._baseSize = UDim2.fromOffset(size.X, size.Y)
-	self._openSize, self._openPos = self._baseSize, centerPos()
-	self._centered = true
+	self._baseSize = UDim2.fromOffset(W, H)
+	self._openSize, self._openPos = self._baseSize, centerFor(W, H)
+	self._centered, self._maximized = true, false
 	self.IsOpen = false
 
 	local main = new("Frame", {
-		Name = "Main", AnchorPoint = Vector2.new(0.5, 0.5), Position = self._pillPos, Size = pillSize,
+		Name = "Main", AnchorPoint = Vector2.new(0, 0), Position = self._pillPos, Size = pillSize,
 		BackgroundColor3 = Theme.Background, BorderSizePixel = 0, ClipsDescendants = true, Parent = gui,
 	}, {
 		new("UICorner", { CornerRadius = UDim.new(0, PILL_H / 2) }),
@@ -307,12 +322,29 @@ function Library:CreateWindow(opts)
 	self._corner = main:FindFirstChildOfClass("UICorner")
 	stroke(Theme.Line, 1).Parent = main
 
-	-- จัดกึ่งกลางใหม่เมื่อขนาดจอเปลี่ยน
-	self:_track(gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+	-- ขนาดจอเปลี่ยน (หมุนจอมือถือ / ย่อขยายหน้าต่างเกม): ปรับหน้าต่างให้พอดีจอและอยู่ในจอเสมอ
+	local function fit()
+		local a = screen()
+		local w, h = fitSize(self._openSize.X.Offset, self._openSize.Y.Offset, a)
+		self._openSize = UDim2.fromOffset(w, h)
+		if self._centered then
+			self._openPos = centerFor(w, h)
+		else
+			self._openPos = UDim2.fromOffset(
+				math.clamp(self._openPos.X.Offset, 0, math.max(a.X - w, 0)),
+				math.clamp(self._openPos.Y.Offset, 0, math.max(a.Y - h, 0))
+			)
+		end
 		self._pillPos = pillPosNow()
-		if self._centered then self._openPos = centerPos() end
-		main.Position = self.IsOpen and self._openPos or self._pillPos
-	end))
+		if self.IsOpen then
+			main.Size, main.Position = self._openSize, self._openPos
+		else
+			main.Position = self._pillPos
+		end
+		if self._toastHolder then self._toastHolder.Size = UDim2.new(0, math.min(320, a.X - 24), 1, -40) end
+	end
+	self._fit = fit
+	self:_track(gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit))
 
 	-- ผิวของแคปซูล (โลโก้ + ชื่อ) แสดงตอนพับ จางหายตอนขยาย
 	local cover = new("Frame", {
@@ -395,12 +427,13 @@ function Library:CreateWindow(opts)
 	makeDivider(rail, { Position = UDim2.new(1, -1, 0, 0) }, false, true)
 
 	-- โลโก้ (บนสุด ไม่เลื่อน)
-	local logoHolder = new("TextButton", { Size = UDim2.new(1, 0, 0, 68), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Parent = rail })
-	local logo = makeIcon(logoHolder, opts.Logo or "◈", 38, Theme.Accent, Theme.AccentText)
+	local logoHolder = new("TextButton", { Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Parent = rail })
+	makeDivider(logoHolder, { Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, -1, 0, 1) }) -- เส้นระดับเดียวกับเส้นใต้หัวหน้าต่าง
+	local logo = makeIcon(logoHolder, opts.Logo or "◈", 42, Theme.Accent, Theme.AccentText)
 	logo.BackgroundColor3 = Color3.new(1, 1, 1)
 	grad(logo, 45)
 	logo.AnchorPoint = Vector2.new(0.5, 0.5)
-	logo.Position = UDim2.new(0.5, 0, 0.5, 2)
+	logo.Position = UDim2.new(0.5, 0, 0.5, 0)
 	logoHolder.MouseEnter:Connect(function()
 		self:_showTip(logoHolder, (opts.Title or "NovaUI") .. (opts.Version and (" " .. opts.Version) or ""))
 	end)
@@ -408,14 +441,14 @@ function Library:CreateWindow(opts)
 
 	-- หมวดหมู่ (เลื่อนได้)
 	local nav = new("ScrollingFrame", {
-		Position = UDim2.fromOffset(0, 68), Size = UDim2.new(1, 0, 1, -132),
+		Position = UDim2.fromOffset(0, HEADER_H), Size = UDim2.new(1, 0, 1, -(HEADER_H + 64)),
 		BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0,
 		CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.Never,
 		Parent = rail,
 	}, {
-		new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6), HorizontalAlignment = Enum.HorizontalAlignment.Center }),
-		pad(0, 0, 1, 8),
+		new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 8), HorizontalAlignment = Enum.HorizontalAlignment.Center }),
+		pad(0, 6, 0, 8),
 	})
 	self.Nav = nav
 
@@ -423,9 +456,9 @@ function Library:CreateWindow(opts)
 	local user = new("TextButton", { Size = UDim2.new(1, 0, 0, 64), Position = UDim2.new(0, 0, 1, -64), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Parent = rail })
 	makeDivider(user, { Size = UDim2.new(1, -1, 0, 1) })
 	local avatar = new("ImageLabel", {
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.fromOffset(36, 36),
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.fromOffset(40, 40),
 		BackgroundColor3 = Theme.Raised, BorderSizePixel = 0, Parent = user,
-	}, { round(18) })
+	}, { round(20) })
 	task.spawn(function()
 		local ok, img = pcall(function()
 			return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
@@ -477,20 +510,17 @@ function Library:CreateWindow(opts)
 	closeBtn.MouseButton1Click:Connect(function() self:Destroy() end)
 	minBtn.MouseButton1Click:Connect(function() self:Toggle() end)
 
-	local maximized = false
 	maxBtn.MouseButton1Click:Connect(function()
 		if not self.IsOpen then return end
-		maximized = not maximized
-		local a = self._screen()
-		self._openSize = maximized
-			and UDim2.fromOffset(math.floor((a.X - 40) / 2) * 2, math.floor((a.Y - 40) / 2) * 2)
-			or self._baseSize
-		self._openPos = self._centerPos()
+		self._maximized = not self._maximized
+		local a = screen()
+		self._openSize = self._maximized and UDim2.fromOffset(math.floor((a.X - 24) / 2) * 2, math.floor((a.Y - 24) / 2) * 2) or self._baseSize
 		self._centered = true
+		self._openPos = centerFor(self._openSize.X.Offset, self._openSize.Y.Offset)
 		tween(main, { Size = self._openSize, Position = self._openPos }, 0.25)
 	end)
 
-	-- ลากหน้าต่างจากแถบหัว
+	-- ลากหน้าต่างจากแถบหัว (ไม่ให้ลากออกนอกจนหาไม่เจอ)
 	local dragging, dragStart, startPos = false, nil, nil
 	header.InputBegan:Connect(function(input)
 		if isPress(input) and self.IsOpen then
@@ -503,17 +533,103 @@ function Library:CreateWindow(opts)
 	self:_track(UserInputService.InputChanged:Connect(function(input)
 		if dragging and isMove(input) then
 			local d = input.Position - dragStart
-			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + math.floor(d.X), startPos.Y.Scale, startPos.Y.Offset + math.floor(d.Y))
+			local a = screen()
+			local w = main.AbsoluteSize.X
+			main.Position = UDim2.fromOffset(
+				math.clamp(startPos.X.Offset + math.floor(d.X), 60 - w, a.X - 60),
+				math.clamp(startPos.Y.Offset + math.floor(d.Y), 0, a.Y - 44)
+			)
 			self._openPos = main.Position
 			self._centered = false
 		end
 	end))
+
+	-- ===== ปรับขนาดโดยลากขอบ/มุม (เมาส์หรือนิ้ว) เหมือนหน้าต่างโปรแกรมบนคอม =====
+	local touch = UserInputService.TouchEnabled
+	local EDGE, CORNER = touch and 14 or 8, touch and 28 or 18 -- ความหนาโซนจับ (นิ้วต้องกว้างกว่า)
+	local resizing = nil
+
+	local function onResizeMove(input)
+		local r = resizing
+		local a = screen()
+		local d = input.Position - r.start
+		local maxW, maxH = a.X - MARGIN * 2, a.Y - MARGIN * 2
+		local minW, minH = math.min(MIN_W0, maxW), math.min(MIN_H0, maxH)
+		local x, y, w, h = r.x, r.y, r.w, r.h
+		if r.e.r then w = math.clamp(r.w + d.X, minW, maxW) end
+		if r.e.l then w = math.clamp(r.w - d.X, minW, maxW) end
+		if r.e.b then h = math.clamp(r.h + d.Y, minH, maxH) end
+		if r.e.t then h = math.clamp(r.h - d.Y, minH, maxH) end
+		w, h = math.floor(w / 2) * 2, math.floor(h / 2) * 2 -- เลขคู่ ตัวอักษรที่จัดกึ่งกลางจะไม่ตกครึ่งพิกเซล
+		if r.e.l then x = r.x + r.w - w end
+		if r.e.t then y = r.y + r.h - h end
+		x = math.clamp(math.floor(x), 0, math.max(a.X - w, 0))
+		y = math.clamp(math.floor(y), 0, math.max(a.Y - h, 0))
+		main.Size = UDim2.fromOffset(w, h)
+		main.Position = UDim2.fromOffset(x, y)
+		self._openSize, self._openPos, self._baseSize = main.Size, main.Position, main.Size
+		self._centered, self._maximized = false, false
+	end
+
+	local function addHandle(edges, pos, hsize)
+		local hnd = new("TextButton", {
+			Position = pos, Size = hsize, BackgroundColor3 = Theme.Accent, BackgroundTransparency = 1,
+			Text = "", AutoButtonColor = false, ZIndex = 80, Parent = main,
+		})
+		hnd.MouseEnter:Connect(function()
+			if not resizing then tween(hnd, { BackgroundTransparency = 0.78 }, 0.1) end
+		end)
+		hnd.MouseLeave:Connect(function()
+			if not (resizing and resizing.hnd == hnd) then tween(hnd, { BackgroundTransparency = 1 }, 0.1) end
+		end)
+		hnd.InputBegan:Connect(function(input)
+			if isPress(input) and self.IsOpen and not resizing then
+				resizing = {
+					input = input, e = edges, hnd = hnd, start = input.Position,
+					x = main.Position.X.Offset, y = main.Position.Y.Offset,
+					w = main.AbsoluteSize.X, h = main.AbsoluteSize.Y,
+				}
+				tween(hnd, { BackgroundTransparency = 0.65 }, 0.1)
+			end
+		end)
+		return hnd
+	end
+	self:_track(UserInputService.InputChanged:Connect(function(input)
+		if resizing and (input == resizing.input or input.UserInputType == Enum.UserInputType.MouseMovement) then
+			onResizeMove(input)
+		end
+	end))
+	self:_track(UserInputService.InputEnded:Connect(function(input)
+		if resizing and (input == resizing.input or input.UserInputType == Enum.UserInputType.MouseButton1) then
+			tween(resizing.hnd, { BackgroundTransparency = 1 }, 0.15)
+			resizing = nil
+		end
+	end))
+
+	local E, C = EDGE, CORNER
+	addHandle({ l = true }, UDim2.new(0, 0, 0, C), UDim2.new(0, E, 1, -2 * C))
+	addHandle({ r = true }, UDim2.new(1, -E, 0, C), UDim2.new(0, E, 1, -2 * C))
+	addHandle({ t = true }, UDim2.new(0, C, 0, 0), UDim2.new(1, -2 * C, 0, E))
+	addHandle({ b = true }, UDim2.new(0, C, 1, -E), UDim2.new(1, -2 * C, 0, E))
+	addHandle({ l = true, t = true }, UDim2.new(0, 0, 0, 0), UDim2.fromOffset(C, C))
+	addHandle({ r = true, t = true }, UDim2.new(1, -C, 0, 0), UDim2.fromOffset(C, C))
+	addHandle({ l = true, b = true }, UDim2.new(0, 0, 1, -C), UDim2.fromOffset(C, C))
+	local brHandle = addHandle({ r = true, b = true }, UDim2.new(1, -C, 1, -C), UDim2.fromOffset(C, C))
+	-- จุดเล็กๆ ที่มุมขวาล่าง บอกว่าลากปรับขนาดได้
+	for _, p in ipairs({ { 6, 6 }, { 12, 6 }, { 6, 12 } }) do
+		new("Frame", {
+			AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -p[1], 1, -p[2]), Size = UDim2.fromOffset(3, 3),
+			BackgroundColor3 = Theme.Muted, BackgroundTransparency = 0.35, BorderSizePixel = 0, Parent = brHandle,
+		}, { round(2) })
+	end
 
 	-- ปุ่มลัดซ่อน/แสดง
 	local key = opts.ToggleKey or Enum.KeyCode.RightShift
 	self:_track(UserInputService.InputBegan:Connect(function(input, processed)
 		if not processed and input.KeyCode == key then self:Toggle() end
 	end))
+
+	fit()
 
 	-- เปิดตัวด้วยแอนิเมชันขยายจากแคปซูล
 	task.delay(0.15, function()
@@ -718,12 +834,12 @@ function WindowClass:AddTab(o)
 
 	local color = o.Color or Theme.Accent
 	local btn = new("TextButton", {
-		Size = UDim2.fromOffset(44, 44), BackgroundColor3 = color, BackgroundTransparency = 0.82,
+		Size = UDim2.fromOffset(52, 52), BackgroundColor3 = color, BackgroundTransparency = 0.82,
 		Text = "", AutoButtonColor = false, LayoutOrder = g.Order + g.Count, Parent = self.Nav,
-	}, { round(12) })
-	setIconContent(btn, o.Icon, 44, Color3.new(1, 1, 1), 12)
+	}, { round(14) })
+	setIconContent(btn, o.Icon, 52, Color3.new(1, 1, 1), 14)
 	local indicator = new("Frame", {
-		Position = UDim2.new(0, -10, 0.5, -12), Size = UDim2.fromOffset(3, 24),
+		Position = UDim2.new(0, -10, 0.5, -14), Size = UDim2.fromOffset(3, 28),
 		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Visible = false, Parent = btn,
 	}, { round(2) })
 	grad(indicator, 90)
@@ -814,14 +930,15 @@ local function makeRow(el, title, desc, rightWidth)
 		Position = UDim2.fromOffset(16, hasDesc and 11 or 16), Size = UDim2.new(1, -(rightWidth + 32), 0, 22),
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = row,
 	})
+	local d
 	if hasDesc then
-		label({
+		d = label({
 			Text = desc, TextColor3 = Theme.Muted, TextSize = 14,
 			Position = UDim2.fromOffset(16, 35), Size = UDim2.new(1, -(rightWidth + 32), 0, 20),
 			TextTruncate = Enum.TextTruncate.AtEnd, Parent = row,
 		})
 	end
-	return row, t
+	return row, t, d
 end
 
 ------------------------------------------------------------------ label
@@ -992,7 +1109,7 @@ function SectionClass:AddDropdown(o)
 	local maxSel = o.Max
 	if maxSel == nil then maxSel = o.Multi and 0 or 1 end
 	local multi = maxSel ~= 1
-	local row = makeRow(el, o.Title, o.Description, 280)
+	local row, titleLbl, descLbl = makeRow(el, o.Title, o.Description, 280)
 
 	local options, byName = normalize(o.Options)
 	local usePopup = o.Popup
@@ -1015,6 +1132,36 @@ function SectionClass:AddDropdown(o)
 		BackgroundColor3 = Theme.Field, Text = "", AutoButtonColor = false, Parent = row,
 	}, { round(8), stroke() })
 	local fieldStroke = field:FindFirstChildOfClass("UIStroke")
+
+	-- ถ้าแถวแคบ (หน้าต่างเล็ก/มือถือ) ให้ย้ายช่องเลือกลงไปใต้ชื่อเต็มความกว้าง
+	local hasDesc = o.Description ~= nil and o.Description ~= ""
+	local compactMode = nil
+	local function applyLayout()
+		local w = row.AbsoluteSize.X
+		local compact = w > 0 and w < 500
+		if compact == compactMode then return end
+		compactMode = compact
+		if compact then
+			local headH = hasDesc and 62 or 46
+			titleLbl.Size = UDim2.new(1, -32, 0, 22)
+			if not hasDesc then titleLbl.Position = UDim2.fromOffset(16, 12) end
+			if descLbl then descLbl.Size = UDim2.new(1, -32, 0, 20) end
+			row.Size = UDim2.new(1, 0, 0, headH + 42 + 14)
+			field.AnchorPoint = Vector2.new(0, 0)
+			field.Position = UDim2.fromOffset(16, headH)
+			field.Size = UDim2.new(1, -32, 0, 42)
+		else
+			titleLbl.Size = UDim2.new(1, -(280 + 32), 0, 22)
+			if not hasDesc then titleLbl.Position = UDim2.fromOffset(16, 16) end
+			if descLbl then descLbl.Size = UDim2.new(1, -(280 + 32), 0, 20) end
+			row.Size = UDim2.new(1, 0, 0, hasDesc and 66 or 54)
+			field.AnchorPoint = Vector2.new(1, 0.5)
+			field.Position = UDim2.new(1, -16, 0.5, 0)
+			field.Size = UDim2.fromOffset(264, 42)
+		end
+	end
+	row:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyLayout)
+	task.defer(applyLayout)
 	local text = label({
 		Text = "", Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -44, 1, 0),
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = field,
@@ -1185,7 +1332,7 @@ function SectionClass:AddDropdown(o)
 		local layer, backdrop = window._layer, window._backdrop
 
 		local panel = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(400, 400),
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(400, 400),
 			BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Visible = false, ClipsDescendants = true,
 			ZIndex = 91, Parent = layer,
 		}, { round(14), stroke(Theme.Line), new("UIScale", { Scale = 0.94 }) })
@@ -1258,12 +1405,20 @@ function SectionClass:AddDropdown(o)
 			for _, opt in ipairs(options) do
 				if opt.PBtn and opt.PBtn.Visible then visible += 1 end
 			end
-			local listH = math.min(math.max(visible, 1) * 46, 276)
+			local ms = window.Main.AbsoluteSize
+			local reserve = listTop + (multi and 56 or 8)
+			local maxList = math.clamp(ms.Y - reserve - 32, 94, 276) -- ไม่ให้สูงเกินหน้าต่าง
+			local listH = math.min(math.max(visible, 1) * 46, maxList)
 			list.Size = UDim2.new(1, 0, 0, listH)
 			empty.Visible = visible == 0
-			local ph = listTop + listH + (multi and 56 or 8)
-			panel.Size = UDim2.fromOffset(400, ph + ph % 2)
+			local ph = reserve + listH
+			local pw = math.clamp(ms.X - 32, 280, 420)
+			panel.Size = UDim2.fromOffset(pw + pw % 2, ph + ph % 2) -- เลขคู่ + จัดกึ่งกลางด้วยพิกเซลเต็ม ให้คมชัด
+			panel.Position = UDim2.fromOffset(math.floor(ms.X / 2), math.floor(ms.Y / 2))
 		end
+		window.Main:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			if window._activePicker == P then relayout() end
+		end)
 
 		local function applyFilter()
 			local q = searchBox and string.lower(searchBox.Text) or ""
